@@ -5,6 +5,11 @@ using System.Linq;
 using System.Text;
 using System.IO;
 using System.Xml;
+using System.Windows;
+using System.Windows.Forms;
+using CommandLine.Utility;
+using System.Diagnostics;
+
 
 
 /// <summary>
@@ -71,7 +76,7 @@ namespace XMLTV2MXF
         /// <returns>String in format "!Channel!uid"</returns>
         public string channelUID()
         {
-            return "!Channel!"+ConfigurationSettings.AppSettings["providerString"]+"!" + id_.ToString();
+            return "!Channel!" + XMLTV2MXF.Properties.Settings.Default.ProviderString + "!" + id_.ToString();
         }
 
         /// <summary>
@@ -89,7 +94,7 @@ namespace XMLTV2MXF
         /// <returns>String in "!Affiliate!provider" format</returns>
         public string affiliate()
         {
-            return "!Affiliate!" + ConfigurationSettings.AppSettings["providerString"];
+            return "!Affiliate!" + XMLTV2MXF.Properties.Settings.Default.ProviderString;
         }
 
         /// <summary>
@@ -200,7 +205,7 @@ namespace XMLTV2MXF
     /// <summary>
     /// The main program class for generating the MXF
     /// </summary>
-    class XMLTV2MXF
+    class XMLTV2MXF_Main
     {
         /// <summary>
         /// Collection of all the programs.
@@ -213,21 +218,83 @@ namespace XMLTV2MXF
 
         /// <summary>
         /// Main execution point for the program
+        /// If /batch is specified, we use the .exe.config values to continue processing,
+        /// otherwise we display a GUI for configuration.
         /// </summary>
-        /// <param name="args">Array of command line arguments.  None are expected, we use the .exe.config instead</param>
+        /// <param name="args">Array of command line arguments.</param>
         static void Main(string[] args)
         {
+            // process command line arguments
+            Arguments CommandLine = new Arguments(args);
+
+
+            // if /batch is not specified, show a GUI that helps set up parameters
+            if (CommandLine["batch"] == null)
+            {
+                Console.WriteLine("/BATCH not specified on command line, starting GUI....");
+                XMLTV2MXF_GUI theGUI = new XMLTV2MXF_GUI();
+                DialogResult guiResult = theGUI.ShowDialog();
+
+                if (guiResult != DialogResult.OK)
+                {
+                    Console.WriteLine("Execution Cancelled from GUI- Exiting");
+                    return;
+                }
+            }
+            
             // init the program/channel collections
             progs = new System.Collections.ArrayList();
             channels = new System.Collections.ArrayList();
 
+            // run the preprocessor if necessary:
+            if (XMLTV2MXF.Properties.Settings.Default.usePreProcessor)
+            {
+                try
+                {
+                    // Run the command
+                    string cmd = XMLTV2MXF.Properties.Settings.Default.preProcessorCommand;
+                    // substitue $INPUTFILE for the chosen input file
+                    cmd = cmd.Replace("$INPUTFILE", XMLTV2MXF.Properties.Settings.Default.inputXMLTVfile);
+                    Console.WriteLine("---------------------------------------------");
+                    Console.WriteLine("Executing: ");
+                    Console.WriteLine(cmd);
+
+                    Process pr = new Process();
+                    int application_split = cmd.IndexOf(".exe") + 4;
+                    pr.StartInfo.FileName = cmd.Substring(0, application_split);
+
+                    pr.StartInfo.Arguments = cmd.Substring(application_split, cmd.Length - application_split - 4).Trim();
+
+                    //Console.WriteLine(pr.StartInfo.FileName + ':' +  pr.StartInfo.Arguments);
+
+                    pr.Start();
+
+                    while (pr.HasExited == false)
+                    {
+                        if ((DateTime.Now.Second % 5) == 0)
+                        { // Show a tick every five seconds.
+                            Console.Write(".");
+                        }
+                        System.Threading.Thread.Sleep(1000);
+                    }
+
+                    Console.WriteLine();
+                    Console.WriteLine("---------------------------------------------");
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("Error running preProcessor! Check settings  - Exception caught.");
+                    return;
+                }
+            }
+
             try{
                 // Get the channel information
-                readChannelSettings(ConfigurationSettings.AppSettings["ChannelsXML"]);
+                readChannelSettings(XMLTV2MXF.Properties.Settings.Default.ChannelsXML);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error reading Channels file! Check .exe.settings  - {0} Exception caught.", e);
+                Console.WriteLine("Error reading Channels file! Check .exe.settings  - Exception caught.");
                 return;
             }
 
@@ -235,11 +302,11 @@ namespace XMLTV2MXF
             try
             {
                 // process the xmltv file
-                processXMLTV(ConfigurationSettings.AppSettings["inputXMLTVNZfile"]);
+                processXMLTV(XMLTV2MXF.Properties.Settings.Default.inputXMLTVfile);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error reading xmltv file! Check .exe.settings - {0} Exception caught.", e);
+                Console.WriteLine("Error reading xmltv file! Check .exe.settings - Exception caught.");
                 return;
             }
 
@@ -247,12 +314,54 @@ namespace XMLTV2MXF
             try
             {
                 // output the MXF
-                writeMXF(ConfigurationSettings.AppSettings["outputMXFfile"]);
+                writeMXF(XMLTV2MXF.Properties.Settings.Default.outputMXFfile);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Error writing MXF file! Check .exe.settings, permissions, assembly trust - {0} Exception caught.", e);
+                Console.WriteLine("Error writing MXF file! Check .exe.settings, permissions, assembly trust - Exception caught.");
                 return;
+            }
+
+
+            // run the postprocessor if necessary:
+            if (XMLTV2MXF.Properties.Settings.Default.usePostProcessor)
+            {
+                try{
+                    // Run the command
+                    string cmd = XMLTV2MXF.Properties.Settings.Default.postProcessorCommand;
+                    // substitue $INPUTFILE for the chosen input file
+                    cmd = cmd.Replace("$OUTPUTFILE", XMLTV2MXF.Properties.Settings.Default.outputMXFfile);
+                    Console.WriteLine("---------------------------------------------");
+                    Console.WriteLine("Executing: ");
+                    Console.WriteLine(cmd);
+
+                    Process pr = new Process();
+                    int application_split = cmd.IndexOf(".exe") + 4;
+                    pr.StartInfo.FileName = cmd.Substring(0, application_split);
+
+                    pr.StartInfo.Arguments = cmd.Substring(application_split, cmd.Length - application_split - 4).Trim();
+
+                    //Console.WriteLine(pr.StartInfo.FileName + ':' +  pr.StartInfo.Arguments);
+
+                    pr.Start();
+
+                    while (pr.HasExited == false)
+                    {
+                        if ((DateTime.Now.Second % 5) == 0)
+                        { // Show a tick every five seconds.
+                            Console.Write(".");
+                        }
+                        System.Threading.Thread.Sleep(1000);
+                    }
+
+                    Console.WriteLine();
+                    Console.WriteLine("---------------------------------------------");
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("Error running postProcessor! Check settings  - Exception caught.");
+                    return;
+                }
             }
         }
 
